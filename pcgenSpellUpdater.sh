@@ -175,7 +175,7 @@ echo "Description line: ${htmlFileLine}"
             arrSpellEntry[components]="$(sed -En 's,.*Components:</strong> (([^<])+)</p>,\1,p' <<< "${htmlFileLine//’/\'}")"
           elif [[ "${htmlFileLine}" =~ $SPELLDURATION ]]; then
 #echo "Start spell ent duration"
-            arrSpellEntry[duration]="$(sed -En -e 's|<a .*>(([^<])+)</a>|\1|' -e 's|<p .+> (([a-zA-Z0-9 ,()])+)</p>|\1|p' <<< "${htmlFileLine//’/\'}")"
+            arrSpellEntry[duration]="$(sed -En -e 's|<a .*>(([^<])+)</a>|\1|' -e 's|<p .+> (([^<])+)</p>|\1|p' <<< "${htmlFileLine//’/\'}")"
           fi
         fi
         # Test if spell entry is present in pcgen file
