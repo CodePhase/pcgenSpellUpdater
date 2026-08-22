@@ -31,12 +31,30 @@ function getArgs {
         pcgenFile="$1"
         shift
         ;;
+      '--dry')
+        dryRun=1
+        shift
+        ;;
+      '--debug')
+        debug=1
+        shift
+        ;;
       *)
         echo "Unrecognized arg $1. Exiting"
         exit 1
         ;;
     esac
   done
+
+  if [ ! -f "${sourceHtmlFile}" ]; then
+    echo "ERROR: ${sourceHtmlFile} is not accessible." >&2
+    exit 1
+  fi
+
+  if [ -z "$dryRun" ] && [ ! -f "${pcgenFile}" ]; then
+    echo "ERROR: ${pcgenFile} is not accessible." >&2
+    exit 1
+  fi
 }
 
 function htmlSpellScrape {
@@ -69,13 +87,13 @@ function htmlSpellScrape {
     # Skip through html file until spell description section
     if [[ "$htmlFileLine" =~ $SPELLSECSTART ]]; then
       spellSecFound=1
-echo "Found Spell Description Section start: ${htmlFileLine}"
+      debug "Found Spell Description Section start: ${htmlFileLine}"
       continue
     elif [ -z "$spellSecEndUpdated" ] && [ -n "$spellSecFound" ] && [[ "${htmlFileLine}" =~ $SPELLSECEND ]]; then
       # I know you aren't supposed to change CONSTANT values, but sources can differ
       SPELLSECEND="$(sed -En 's,<div .+ data-next-title="([^"]+).+,\1,p' <<< "${htmlFileLine}")"
       spellSecEndUpdated=1
-echo "Set SPELLSECEND to ${SPELLSECEND}"
+      debug "Set SPELLSECEND to ${SPELLSECEND}"
       continue
     #Some spells contain stat blocks. Skip those.
     elif [ -n "$spellSecFound" ] && [[ "${htmlFileLine}" =~ $STATBLOCKSTART ]]; then
@@ -88,33 +106,67 @@ echo "Set SPELLSECEND to ${SPELLSECEND}"
        continue
       fi
     elif [ -n "$spellSecFound" ] && [[ "${htmlFileLine}" =~ $SPELLENTSTART ]]; then
+      # Found a spell entry. Process it line by line
       spellEntryFound=1
-echo "Found Spell Entry start: ${htmlFileLine}"
+      debug "Found Spell Entry start: ${htmlFileLine}"
       # Create a new entry array and store the spell title
       declare -gA arrSpellEntry
-#echo "Setting spell entry title"
+      debug "Setting spell entry title"
       arrSpellEntry[title]="$(sed -En 's,<h3 .+>(([^<])+)</a></h3>$,\1,p' <<< "${htmlFileLine//’/\'}")"
-#echo "Finished setting spell entry title"
+      debug "Finished setting spell entry title"
       continue
     elif [ -n "$spellEntryFound" ]; then
-#echo "DEBUG: We know spellEntryFound is set"
+      debug "We know spellEntryFound is set"
       if [[ "${htmlFileLine}" =~ $SPELLENTEND1 ]] || [[ "${htmlFileLine}" =~ $SPELLENTEND2 ]]; then
         arrSpellEntry[description]="${arrSpellEntry[description]//;./.}"
-echo
-echo "**************"
-echo "DEBUG: Spell Title: ${arrSpellEntry[title]}"
-for key in "${!arrSpellEntry[@]}"; do
-  echo "DEBUG: ${key} - ${arrSpellEntry[${key}]}"
-done
+        debug "\nDEBUG: **************\nDEBUG: Spell Title: ${arrSpellEntry[title]}"
+        if [ -n "$debug" ]; then
+          for key in "${!arrSpellEntry[@]}"; do
+            debug "${key} - ${arrSpellEntry[${key}]}"
+          done
+        fi
+        # Test if spell entry is present in pcgen file
+        spellEntry_pcgen="$(grep -P "^${arrSpellEntry[title]}\t|\t${arrSpellEntry[title]}\t" ${pcgenFile})"
+        if [ -n "${spellEntry_pcgen}" ]; then
+          # True: Update entry
+          if [ -n "$debug" ]; then
+            debug "Found existing entry of spell '${arrSpellEntry[title]}' in pcgen file\nDEBUG: ${spellEntry_pcgen}"
+          fi
+          [ -n "${arrSpellEntry[savingthrow]}" ] && spellEntry_pcgen_savingthrow="SAVEINFO:${arrSpellEntry[savingthrow]}"
+          [ -n "${spellEntryIsRitual}" ] && spellEntry_pcgen_ritual="SUBSCHOOL:Ritual"
+          newSpellEntry_pcgen="${arrSpellEntry[title]}						KEY:${arrSpellEntry[title]}						TYPE:Arcane.Divine.Spell	SCHOOL:${arrSpellEntry[school]}		${spellEntry_pcgen_ritual}		COMPS:${arrSpellEntry[components]}																																																											CASTTIME:${arrSpellEntry[castingtime]}																		RANGE:${arrSpellEntry[range]}					DURATION:${arrSpellEntry[duration]}				${spellEntry_pcgen_savingthrow}		SOURCEPAGE:p.211	DESC:${arrSpellEntry[description]/% /}"
+          unset spellEntry_pcgen_savingthrow
+          unset spellEntry_pcgen_ritual
+          unset spellEntryIsRitual
+          if [ -z "$dryRun" ]; then
+            debug "Replacing with\nDEBUG: ${newSpellEntry_pcgen}"
+            sed -i -e "s|^${arrSpellEntry[title]}\t.*|${newSpellEntry_pcgen}|" -e "s|.*\t${arrSpellEntry[title]}\t.*|${newSpellEntry_pcgen}|" ${pcgenFile}
+          else
+            debug "Skipping file update due to --dryrun"
+            debug "Would have run:"
+            # We can't use the 'debug' function for this next call because the '\t' will get literally expanded in our output due to debug's 'echo -e' usage
+            echo "DEBUG: sed -i -e \"s|^${arrSpellEntry[title]}\t.*|${newSpellEntry_pcgen}|\" -e \"s|.*\t${arrSpellEntry[title]}\t.*|${newSpellEntry_pcgen}|\" ${pcgenFile}" >&2
+          fi
+        else
+          # False: Add new entry after previous entry
+          if [ -z "$dryRun" ]; then
+            debug "Existing entry of spell '${arrSpellEntry[title]}' not found; adding."
+            echo -e "${newSpellEntry_pcgen}" >> ${pcgenFile}
+          else
+            debug "Skipping file update due to --dryrun"
+            debug "Would have run:"
+            debug "echo -e \"${newSpellEntry_pcgen}\" >> ${pcgenFile}"
+          fi
+        fi
         unset spellEntryFound
         # Reset Spell Entry Description section flag
         unset spellEntryDescStart
         # Empty the previous entry array
         unset arrSpellEntry
-#echo "Found Spell Entry end: ${htmlFileLine}"
+        debug "Found Spell Entry end: ${htmlFileLine}"
         continue
       else
-#echo "DEBUG: htmlFileLine - ${htmlFileLine}"
+        debug "htmlFileLine - ${htmlFileLine}"
         # Scrape spell entry
         # Activate spell description section if we've reached the end of the spell components section
         if [[ "${htmlFileLine}" =~ $SPELLCOMPEND ]]; then
@@ -125,28 +177,28 @@ done
         if [ -n "${spellEntryDescStart}" ]; then
           # Capture Description
           # Format Description: remove tag blocks and replace line breaks with spaces
-#echo "Start spell ent desc clean 1"
-echo "Description line: ${htmlFileLine}"
-          htmlFileLineClean="$(sed -E -e 's|<p [^>]+>||g' -e 's|</p>| |g' -e 's|</?a[^>]*>||g' -e 's|</?strong>||g' -e 's|</?em>||g' -e 's|</?figure[^>]*>||g' -e 's,</?span[^>]*>[a-zA-Z0-9 ]*,,g' -e 's,</?figcaption[^>]*>[a-zA-Z0-9 ]*,,g' -e 's|</?ul[^>]*>||g' -e 's|<li [^>]*>|* |g' -e 's|</li>||g' -e 's|<img[^>]+>||g' <<< "${htmlFileLine}")"
-#echo "htmlFileLineClean 1: ${htmlFileLineClean}"
+          debug "Start spell ent desc clean 1"
+          debug "Description line: ${htmlFileLine}"
+          htmlFileLineClean="$(sed -E -e 's|<p [^>]+>||g' -e 's|</p>| |g' -e 's|</?a[^>]*>||g' -e 's|</?strong>||g' -e 's|</?em>||g' -e 's|</?figure[^>]*>||g' -e 's,<span[^>]*>[^<]*</span>,,g' -e 's,<figcaption>.*</figcaption>,,g' -e 's|</?ul[^>]*>||g' -e 's|<li [^>]*>|* |g' -e 's|</li>||g' -e 's|<img[^>]*>||g' <<< "${htmlFileLine}")"
+          debug "htmlFileLineClean 1: ${htmlFileLineClean}"
           # Format Description: replace tables with sentence-based lists
-#echo "Start spell ent desc clean 2"
+          debug "Start spell ent desc clean 2"
           htmlFileLineClean="$(sed -E -e 's|<table[^>]*>||g' -e 's|</table>|. |g' -e 's|</?caption>||g' -e 's|<h4[^>]*>||g' -e 's|(([a-zA-Z0-9 ])+)</h4>|\1:|g' -e 's|</?thead>||g' -e 's|<th>[^<]*</th>||g' -e 's|</?tbody>||g' -e 's|</?tr>||g' <<< "${htmlFileLineClean}")"
-#echo "htmlFileLineClean 2: ${htmlFileLineClean}"
+          debug "htmlFileLineClean 2: ${htmlFileLineClean}"
           if ( grep -qE '<td>.+</td>' <<< "${htmlFileLineClean}") && [ -z "$tdSet" ]; then
             tdSet=1
-#echo "Start spell ent desc clean 3"
+            debug "Start spell ent desc clean 3"
             htmlFileLineClean="$(sed -E 's|<td>([^<]+)</td>| \1 - |g' <<< "${htmlFileLineClean}")"
-#echo "htmlFileLineClean 3: ${htmlFileLineClean}"
+            debug "htmlFileLineClean 3: ${htmlFileLineClean}"
           elif ( grep -qE '<td>.+</td>' <<< "${htmlFileLineClean}") && [ -n "$tdSet" ]; then
             unset tdSet
-#echo "Start spell ent desc clean 4"
+            debug "Start spell ent desc clean 4"
             htmlFileLineClean="$(sed -E 's|<td>([^<]+)</td>|\1;|g' <<< "${htmlFileLineClean}")"
-#echo "htmlFileLineClean 4: ${htmlFileLineClean}"
+            debug "htmlFileLineClean 4: ${htmlFileLineClean}"
           fi
           # Discern saving throw type(s) from Description
           if [[ "${htmlFileLineClean}" =~ $SPELLSAVINGTHROW ]]; then
-#echo "Start saving throw detection"
+            debug "Start saving throw detection"
             arrSpellEntry[savingthrow]="$(sed -En 's,.+a (([a-zA-Z])+) saving throw.+,\1,p' <<< "${htmlFileLineClean}")"
           fi
           arrSpellEntry[description]="${arrSpellEntry[description]}${htmlFileLineClean//’/\'}"
@@ -154,10 +206,10 @@ echo "Description line: ${htmlFileLine}"
           # Capture Spell Components
           # Store fields: School, Casting Time, Range, Components, Duration
           if [[ "${htmlFileLine}" =~ $SPELLSCHOOL1 ]] || [[ "${htmlFileLine}" =~ $SPELLSCHOOL2 ]]; then
-#echo "Start spell ent school"
+            debug "Start spell ent school"
             arrSpellEntry[school]="$(sed -En -e 's,<p .+>(([a-zA-Z])+) Cantrip .+</p>,\1,p' -e 's,<p .+>Level [0-9] (([a-zA-Z])+) .+</p>,\1,p' <<< "${htmlFileLine//’/\'}")"
           elif [[ "${htmlFileLine}" =~ $SPELLCASTINGTIME ]]; then
-#echo "Start spell ent casting time"
+            debug "Start spell ent casting time"
             arrSpellEntry[castingtime]="$(sed -En -e 's|<a .*>(([a-zA-Z0-9 ])+)</a>|\1|' -e 's|<p .+> (([a-zA-Z0-9 ,()])+)</p>|\1|p' <<< "${htmlFileLine//’/\'}")"
             arrSpellEntry[castingtime]=${arrSpellEntry[castingtime]/Action/1 Action}
             arrSpellEntry[castingtime]=${arrSpellEntry[castingtime]/Bonus 1 Action/1 Bonus Action}
@@ -165,26 +217,23 @@ echo "Description line: ${htmlFileLine}"
               spellEntryIsRitual=1
               arrSpellEntry[castingtime]=${arrSpellEntry[castingtime]% or Ritual}
             fi
-#echo "DEBUG: saved Casting Time as ${arrSpellEntry[castingtime]}"
+            debug "Saved Casting Time as ${arrSpellEntry[castingtime]}"
           elif [[ "${htmlFileLine}" =~ $SPELLRANGE ]]; then
-#echo "Start spell ent range"
+            debug "Start spell ent range"
             arrSpellEntry[range]="$(sed -En 's,.*Range:</strong> (([^<])+)</p>,\1,p' <<< "${htmlFileLine//’/\'}")"
-#echo "DEBUG: saved Range as ${arrSpellEntry[range]}"
+            debug "Saved Range as ${arrSpellEntry[range]}"
           elif [[ "${htmlFileLine}" =~ $SPELLCOMPONENTS ]]; then
-#echo "Start spell ent components"
+            debug "Start spell ent components"
             arrSpellEntry[components]="$(sed -En 's,.*Components:</strong> (([^<])+)</p>,\1,p' <<< "${htmlFileLine//’/\'}")"
           elif [[ "${htmlFileLine}" =~ $SPELLDURATION ]]; then
-#echo "Start spell ent duration"
+            debug "Start spell ent duration"
             arrSpellEntry[duration]="$(sed -En -e 's|<a .*>(([^<])+)</a>|\1|' -e 's|<p .+> (([^<])+)</p>|\1|p' <<< "${htmlFileLine//’/\'}")"
           fi
         fi
-        # Test if spell entry is present in pcgen file
-          # True: Update entry
-          # False: Add new entry after previous entry
       fi
     # Detect section end and exit
     elif [ -n "$spellSecFound" ] && [[ "${htmlFileLine}" =~  $SPELLSECEND ]]; then
-echo "Found Spell Description Section end: ${htmlFileLine}"
+      debug "Found Spell Description Section end: ${htmlFileLine}"
       unset spellSecFound
       restoreIfs
       break
@@ -211,6 +260,11 @@ function parseHtmlSpellEntry {
 function parsePcgenSpellEntry {
   # Read tab-separated single line
   echo "We will have something here soon."
+}
+
+function debug {
+  [ -n "$debug" ] && echo -e "DEBUG: ${1}" >&2
+  return 0
 }
 
 getArgs "$@"
