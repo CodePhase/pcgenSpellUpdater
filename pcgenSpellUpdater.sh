@@ -125,19 +125,20 @@ function htmlSpellScrape {
             debug "${key} - ${arrSpellEntry[${key}]}"
           done
         fi
+        [ -n "${arrSpellEntry[savingthrow]}" ] && spellEntry_pcgen_savingthrow="SAVEINFO:${arrSpellEntry[savingthrow]}"
+        [ -n "${spellEntryIsRitual}" ] && spellEntry_pcgen_ritual="SUBSCHOOL:Ritual"
+        newSpellEntry_pcgen="${arrSpellEntry[title]}						KEY:${arrSpellEntry[title]}						TYPE:Arcane.Divine.Spell	SCHOOL:${arrSpellEntry[school]}		${spellEntry_pcgen_ritual}		COMPS:${arrSpellEntry[components]}																																																											CASTTIME:${arrSpellEntry[castingtime]}																		RANGE:${arrSpellEntry[range]}					DURATION:${arrSpellEntry[duration]}				${spellEntry_pcgen_savingthrow}		SOURCEPAGE:p.211	DESC:${arrSpellEntry[description]/% /}"
+        unset spellEntry_pcgen_savingthrow
+        unset spellEntry_pcgen_ritual
+        unset spellEntryIsRitual
         # Test if spell entry is present in pcgen file
+        unset spellEntry_pcgen
         spellEntry_pcgen="$(grep -P "^${arrSpellEntry[title]}\t|\t${arrSpellEntry[title]}\t" ${pcgenFile})"
-        if [ -n "${spellEntry_pcgen}" ]; then
+        if [ $? -eq 0 ]; then
           # True: Update entry
           if [ -n "$debug" ]; then
             debug "Found existing entry of spell '${arrSpellEntry[title]}' in pcgen file\nDEBUG: ${spellEntry_pcgen}"
           fi
-          [ -n "${arrSpellEntry[savingthrow]}" ] && spellEntry_pcgen_savingthrow="SAVEINFO:${arrSpellEntry[savingthrow]}"
-          [ -n "${spellEntryIsRitual}" ] && spellEntry_pcgen_ritual="SUBSCHOOL:Ritual"
-          newSpellEntry_pcgen="${arrSpellEntry[title]}						KEY:${arrSpellEntry[title]}						TYPE:Arcane.Divine.Spell	SCHOOL:${arrSpellEntry[school]}		${spellEntry_pcgen_ritual}		COMPS:${arrSpellEntry[components]}																																																											CASTTIME:${arrSpellEntry[castingtime]}																		RANGE:${arrSpellEntry[range]}					DURATION:${arrSpellEntry[duration]}				${spellEntry_pcgen_savingthrow}		SOURCEPAGE:p.211	DESC:${arrSpellEntry[description]/% /}"
-          unset spellEntry_pcgen_savingthrow
-          unset spellEntry_pcgen_ritual
-          unset spellEntryIsRitual
           if [ -z "$dryRun" ]; then
             debug "Replacing with\nDEBUG: ${newSpellEntry_pcgen}"
             sed -i -e "s|^${arrSpellEntry[title]}\t.*|${newSpellEntry_pcgen}|" -e "s|.*\t${arrSpellEntry[title]}\t.*|${newSpellEntry_pcgen}|" ${pcgenFile}
@@ -242,34 +243,47 @@ function htmlSpellScrape {
 }
 
 function pcgenSpellScrape {
+  declare -a pcgenRemovalSpells=( )
+
   # Test if each pcgen spell entry is present in html file
-    # False: Remove spell entry from pcgen file
-  echo "We will have something here soon."
-}
+  while read -r pcgenFileLine; do
+    debug "PCGEN File Line: ${pcgenFileLine}"
+    if [[ "${pcgenFileLine}" =~ ^[^.]+\.[mM][oO][dD][[:space:]] ]]; then
+      # This is a modification line we can ignore
+      continue
+    elif [[ "${pcgenFileLine}" =~ ^[[:alnum:]] ]]; then
+      # This should be an entry we need to pay attention to
+      spellEntry_pcgen_title="$(awk -F '\t' '{print $1}' <<< "${pcgenFileLine}")"
+      debug "Got pcgen file spell title '${spellEntry_pcgen_title}'"
+      if ! grep -qE "<h3 .+>${spellEntry_pcgen_title//\'/’}</a></h3>$" "${sourceHtmlFile}"; then
+        # False: Remove spell entry from pcgen file
+        pcgenRemovalSpells+=( "${spellEntry_pcgen_title}" )
+      fi
+    fi
+  done < "${pcgenFile}"
 
-function getHtmlSpellEntry {
-  spellEntry="$(sed -n "/id=\"${1}\"/,/^<hr class=\"separator\">/p" "${sourceHtmlFile}")"
-  [ -n "${spellEntry}" ] && spellEntryToArray "${spellEntry}" || echo "Spell entry ${1} not found in ${sourceHtmlFile}"
-}
-
-function parseHtmlSpellEntry {
-  # Read HTML block arg lines
-  read -d '' -r -a arrSpellEntryLines <<< "$1"
-}
-
-function parsePcgenSpellEntry {
-  # Read tab-separated single line
-  echo "We will have something here soon."
+  if [ ${#pcgenRemovalSpells[@]} -gt 0 ]; then
+    debug "There are ${#pcgenRemovalSpells[@]} spells to remove from the pcgen file ${pcgenFile}"
+    for pcgenRemovalSpell in "${pcgenRemovalSpells[@]}"; do
+      if [ -z "$dryRun" ]; then
+        debug "Removing spell ${pcgenRemovalSpell} from pcgenfile"
+        sed -i "/^${pcgenRemovalSpell}\t/d" "${pcgenFile}"
+      else
+        debug "Skipping file update due to --dryrun"
+        debug "Would have run:"
+        echo "sed -i \"/^${pcgenRemovalSpell}\t/d\" \"${pcgenFile}\""
+      fi
+    done
+  fi
 }
 
 function debug {
   [ -n "$debug" ] && echo -e "DEBUG: ${1}" >&2
-  return 0
 }
 
 getArgs "$@"
 
 htmlSpellScrape
-#pcgenSpellScrape
+pcgenSpellScrape
 
 exit 0
