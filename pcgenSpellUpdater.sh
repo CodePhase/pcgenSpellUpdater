@@ -159,6 +159,13 @@ function htmlSpellScrape {
             debug "echo -e \"${newSpellEntry_pcgen}\" >> ${pcgenFile}"
           fi
         fi
+        # Update the ph_abilities.lst file
+        # This implementation sucks and is too specific but I just need it to work now
+        pcgenDataDir="$(dirname ${pcgenFile})"
+        pcgenFile_ph_abilities="${pcgenDataDir}/ph_abilities.lst"
+        debug "Running in case cantrip:"
+        echo "sed -i -E \"/^${arrSpellEntry[title]}\t/s|DESC:[^\t]+|DESC:${arrSpellEntry[description]/% /}|\" \"${pcgenFile_ph_abilities}\"" >&2
+        sed -i -E "/^${arrSpellEntry[title]}\t/s|DESC:[^\t]+|DESC:${arrSpellEntry[description]/% /}|" "${pcgenFile_ph_abilities}"
         unset spellEntryFound
         # Reset Spell Entry Description section flag
         unset spellEntryDescStart
